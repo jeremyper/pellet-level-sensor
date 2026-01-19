@@ -1,0 +1,423 @@
+# ============================================
+# Capteur de Niveau de Granulés v3.0
+# Poêle Moretti Design
+# INTERFACE PRO + CONFIG RÉSEAU
+# ============================================
+
+substitutions:
+  device_name: pellet-level-sensor
+  friendly_name: "Niveau Granulés"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  includes:
+    - pellet_page.h
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          // Appliquer IP statique si configurée
+          if (id(use_static_ip) && id(static_ip).state.length() > 0) {
+            ESP_LOGI("network", "Static IP configured: %s", id(static_ip).state.c_str());
+          }
+
+esp8266:
+  board: esp12e
+  restore_from_flash: true
+
+preferences:
+  flash_write_interval: 1min
+
+# ============================================
+# WIFI - Configuration dynamique
+# ============================================
+wifi:
+  ssid: "TON_SSID_WIFI"
+  password: "TON_MOT_DE_PASSE"
+  min_auth_mode: WPA2
+  
+  # Pour IP statique, décommente et configure :
+  # manual_ip:
+  #   static_ip: 192.168.1.100
+  #   gateway: 192.168.1.1
+  #   subnet: 255.255.255.0
+  #   dns1: 192.168.1.1
+  
+  ap:
+    ssid: "${device_name}-AP"
+    password: "pellet1234"
+
+captive_portal:
+
+api:
+
+ota:
+  - platform: esphome
+    password: "pellet2024"
+  - platform: web_server
+
+logger:
+  level: INFO
+
+web_server:
+  port: 80
+  version: 3
+  local: true
+
+i2c:
+  sda: GPIO4
+  scl: GPIO5
+  scan: true
+  frequency: 400kHz
+
+# ============================================
+# VARIABLES GLOBALES
+# ============================================
+globals:
+  - id: use_static_ip
+    type: bool
+    restore_value: yes
+    initial_value: 'false'
+
+# ============================================
+# PARAMÈTRES RÉSEAU (stockés en flash)
+# ============================================
+text_sensor:
+  - platform: template
+    name: "IP Statique"
+    id: static_ip
+    icon: "mdi:ip-network"
+    
+  - platform: template
+    name: "Passerelle"
+    id: gateway_ip
+    icon: "mdi:router-network"
+    
+  - platform: template
+    name: "Masque"
+    id: subnet_mask
+    icon: "mdi:network"
+    
+  - platform: template
+    name: "DNS"
+    id: dns_ip
+    icon: "mdi:dns"
+    
+  - platform: wifi_info
+    ip_address:
+      name: "IP Actuelle"
+      id: current_ip
+    ssid:
+      name: "SSID"
+      id: wifi_ssid
+    mac_address:
+      name: "MAC"
+      id: wifi_mac
+
+  - platform: template
+    name: "Statut"
+    id: level_status
+    lambda: |-
+      float percent = id(pellet_level_percent).state;
+      if (isnan(percent)) return {"Erreur"};
+      if (percent > 75) return {"Plein"};
+      if (percent > 50) return {"Bon"};
+      if (percent > 25) return {"Moyen"};
+      if (percent > 10) return {"Bas"};
+      return {"CRITIQUE"};
+    update_interval: 30s
+
+  - platform: version
+    name: "Version ESPHome"
+    id: esphome_version
+
+# ============================================
+# PARAMÈTRES CAPTEUR
+# ============================================
+number:
+  - platform: template
+    name: "Hauteur Réservoir"
+    id: reservoir_height
+    unit_of_measurement: "mm"
+    icon: "mdi:arrow-expand-vertical"
+    optimistic: true
+    min_value: 100
+    max_value: 1000
+    step: 10
+    initial_value: 400
+    restore_value: true
+    on_value:
+      then:
+        - component.update: pellet_level_mm
+        - component.update: pellet_level_percent
+
+  - platform: template
+    name: "Offset Capteur"
+    id: sensor_offset
+    unit_of_measurement: "mm"
+    icon: "mdi:arrow-collapse-down"
+    optimistic: true
+    min_value: 0
+    max_value: 200
+    step: 5
+    initial_value: 30
+    restore_value: true
+    on_value:
+      then:
+        - component.update: pellet_level_mm
+        - component.update: pellet_level_percent
+
+  - platform: template
+    name: "Seuil Alerte"
+    id: min_level
+    unit_of_measurement: "mm"
+    icon: "mdi:alert"
+    optimistic: true
+    min_value: 10
+    max_value: 200
+    step: 10
+    initial_value: 50
+    restore_value: true
+
+  - platform: template
+    name: "Capacité"
+    id: capacity_kg
+    unit_of_measurement: "kg"
+    icon: "mdi:weight-kilogram"
+    optimistic: true
+    min_value: 5
+    max_value: 50
+    step: 1
+    initial_value: 15
+    restore_value: true
+    on_value:
+      then:
+        - component.update: days_remaining
+        - component.update: kg_remaining
+
+  - platform: template
+    name: "Consommation"
+    id: consumption_per_day
+    unit_of_measurement: "kg/j"
+    icon: "mdi:fire"
+    optimistic: true
+    min_value: 0.5
+    max_value: 10
+    step: 0.5
+    initial_value: 1.5
+    restore_value: true
+    on_value:
+      then:
+        - component.update: days_remaining
+
+  # Intervalle de mesure
+  - platform: template
+    name: "Intervalle Mesure"
+    id: measure_interval
+    unit_of_measurement: "s"
+    icon: "mdi:timer"
+    optimistic: true
+    min_value: 5
+    max_value: 60
+    step: 5
+    initial_value: 10
+    restore_value: true
+
+# ============================================
+# CAPTEURS
+# ============================================
+sensor:
+  - platform: vl53l0x
+    name: "Distance"
+    id: distance_raw
+    address: 0x29
+    update_interval: 10s
+    long_range: true
+    timeout: 200us
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+    filters:
+      - median:
+          window_size: 5
+          send_every: 1
+          send_first_at: 1
+      - lambda: |-
+          if (x > 2000 || x < 10) return NAN;
+          return x;
+    on_value:
+      then:
+        - component.update: pellet_level_mm
+        - component.update: pellet_level_percent
+
+  - platform: template
+    name: "Niveau mm"
+    id: pellet_level_mm
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+    icon: "mdi:grain"
+    lambda: |-
+      float distance = id(distance_raw).state;
+      if (isnan(distance)) return NAN;
+      float height = id(reservoir_height).state;
+      float offset = id(sensor_offset).state;
+      float level = height - (distance - offset);
+      if (level < 0) level = 0;
+      if (level > height) level = height;
+      return level;
+    update_interval: never
+
+  - platform: template
+    name: "Niveau"
+    id: pellet_level_percent
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    icon: "mdi:grain"
+    lambda: |-
+      float level_mm = id(pellet_level_mm).state;
+      float height = id(reservoir_height).state;
+      if (isnan(level_mm) || height == 0) return NAN;
+      float percent = (level_mm / height) * 100.0;
+      if (percent < 0) percent = 0;
+      if (percent > 100) percent = 100;
+      return percent;
+    update_interval: never
+
+  - platform: template
+    name: "Stock"
+    id: kg_remaining
+    unit_of_measurement: "kg"
+    accuracy_decimals: 1
+    icon: "mdi:weight-kilogram"
+    lambda: |-
+      float percent = id(pellet_level_percent).state;
+      float capacity = id(capacity_kg).state;
+      if (isnan(percent)) return NAN;
+      return (percent / 100.0) * capacity;
+    update_interval: 60s
+
+  - platform: template
+    name: "Autonomie"
+    id: days_remaining
+    unit_of_measurement: "j"
+    accuracy_decimals: 1
+    icon: "mdi:calendar-clock"
+    lambda: |-
+      float kg = id(kg_remaining).state;
+      float conso = id(consumption_per_day).state;
+      if (isnan(kg) || conso == 0) return NAN;
+      return kg / conso;
+    update_interval: 60s
+
+  - platform: wifi_signal
+    name: "Signal WiFi"
+    id: wifi_signal_db
+    update_interval: 60s
+    
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_sensor
+
+  # Mémoire libre
+  - platform: template
+    name: "Mémoire Libre"
+    id: free_memory
+    unit_of_measurement: "KB"
+    accuracy_decimals: 0
+    lambda: |-
+      return ESP.getFreeHeap() / 1024.0;
+    update_interval: 60s
+
+# ============================================
+# SWITCH
+# ============================================
+switch:
+  - platform: template
+    name: "IP Statique Active"
+    id: static_ip_enabled
+    icon: "mdi:ip-network"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - globals.set:
+          id: use_static_ip
+          value: 'true'
+    on_turn_off:
+      - globals.set:
+          id: use_static_ip
+          value: 'false'
+
+# ============================================
+# ALERTES
+# ============================================
+binary_sensor:
+  - platform: template
+    name: "Alerte Niveau Bas"
+    id: low_level_alert
+    device_class: problem
+    lambda: |-
+      float level_mm = id(pellet_level_mm).state;
+      float threshold = id(min_level).state;
+      if (isnan(level_mm)) return false;
+      return level_mm < threshold;
+      
+  - platform: status
+    name: "Connecté"
+    id: api_connected
+
+# ============================================
+# BOUTONS
+# ============================================
+button:
+  - platform: restart
+    name: "Redémarrer"
+    id: restart_btn
+
+  - platform: template
+    name: "Calibrer Vide"
+    id: calibrate_empty
+    icon: "mdi:arrow-down-bold"
+    on_press:
+      then:
+        - lambda: |-
+            float dist = id(distance_raw).state;
+            if (!isnan(dist)) {
+              float offset = id(sensor_offset).state;
+              float new_height = dist - offset;
+              if (new_height > 0) {
+                auto call = id(reservoir_height).make_call();
+                call.set_value(new_height);
+                call.perform();
+              }
+            }
+
+  - platform: template
+    name: "Calibrer Plein"
+    id: calibrate_full
+    icon: "mdi:arrow-up-bold"
+    on_press:
+      then:
+        - lambda: |-
+            float dist = id(distance_raw).state;
+            if (!isnan(dist)) {
+              auto call = id(sensor_offset).make_call();
+              call.set_value(dist);
+              call.perform();
+            }
+
+  - platform: factory_reset
+    name: "Reset Usine"
+    id: factory_reset_btn
+
+status_led:
+  pin:
+    number: GPIO2
+    inverted: true
+
+interval:
+  - interval: 30s
+    then:
+      - component.update: level_status
+      - component.update: days_remaining
+      - component.update: kg_remaining
+      - component.update: free_memory
