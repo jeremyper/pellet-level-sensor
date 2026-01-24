@@ -238,6 +238,7 @@ sensor:
     unit_of_measurement: "mm"
     accuracy_decimals: 0
     filters:
+      - multiply: 1000
       - median:
           window_size: 5
           send_every: 1
